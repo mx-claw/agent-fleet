@@ -32,6 +32,8 @@ class Execution:
     agent_name: str
     status: TaskStatus
     created_at: str
+    process_id: int | None = None
+    exit_code: int | None = None
     started_at: str | None = None
     finished_at: str | None = None
 
@@ -40,6 +42,8 @@ class Execution:
 class ExecutionEvent:
     id: int
     execution_id: str
+    sequence_number: int
+    source: str
     event_type: str
     payload: str
     created_at: str

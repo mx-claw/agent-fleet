@@ -16,3 +16,13 @@ def test_initialize_schema_creates_expected_tables() -> None:
     }
 
     assert {"tasks", "executions", "execution_events"} <= table_names
+
+    execution_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(executions)").fetchall()
+    }
+    event_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(execution_events)").fetchall()
+    }
+
+    assert {"process_id", "exit_code"} <= execution_columns
+    assert {"sequence_number", "source"} <= event_columns

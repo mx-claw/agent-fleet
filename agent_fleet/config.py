@@ -9,6 +9,10 @@ class AppConfig:
     database_path: Path = Path("agent_fleet.db")
     runtime_dir: Path = Path("runtime")
 
+    @property
+    def pid_file_path(self) -> Path:
+        return self.runtime_dir / "orchestrator.pid"
+
     @classmethod
     def from_paths(
         cls,
