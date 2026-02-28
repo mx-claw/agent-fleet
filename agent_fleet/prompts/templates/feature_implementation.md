@@ -6,8 +6,8 @@ Mandatory behavior:
 - Keep changes focused, coherent, and production-ready
 - Prefer small, clear, reviewable commits
 
-Feature request:
-{{instruction}}
+Task background:
+{{task_background_block}}
 
 {{git_repo_block}}
 {{git_remote_block}}

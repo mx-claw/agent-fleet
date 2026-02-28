@@ -14,9 +14,22 @@ TASK_TYPE_TEMPLATES: dict[TaskType, str] = {
 }
 
 
-def build_prompt(*, task_type: str, instruction: str, working_dir: str | Path) -> str:
+def build_prompt(
+    *,
+    task_type: str,
+    working_dir: str | Path,
+    instruction: str = "",
+    input_mode: str = "plain_task",
+    github_issue: dict[str, object] | None = None,
+) -> str:
     path = Path(working_dir)
     normalized_task_type = normalize_task_type(task_type)
+
+    task_background_block = _build_task_background_block(
+        input_mode=input_mode,
+        instruction=instruction,
+        github_issue=github_issue,
+    )
 
     git_repo_block = ""
     git_remote_block = ""
@@ -40,9 +53,9 @@ def build_prompt(*, task_type: str, instruction: str, working_dir: str | Path) -
                 )
 
     context = {
-        "instruction": instruction.strip(),
         "working_dir": str(path),
         "task_type": normalized_task_type.value,
+        "task_background_block": task_background_block,
         "git_repo_block": git_repo_block,
         "git_remote_block": git_remote_block,
         "pr_workflow_block": pr_workflow_block,
@@ -51,6 +64,50 @@ def build_prompt(*, task_type: str, instruction: str, working_dir: str | Path) -
     template_name = TASK_TYPE_TEMPLATES[normalized_task_type]
     rendered = _render_template_file(template_name, context)
     return _normalize_blank_lines(rendered)
+
+
+def _build_task_background_block(
+    *,
+    input_mode: str,
+    instruction: str,
+    github_issue: dict[str, object] | None,
+) -> str:
+    mode = input_mode.strip().lower()
+
+    if mode == "github_issue":
+        issue = github_issue or {}
+        url = str(issue.get("url", "")).strip()
+        title = str(issue.get("title", "")).strip()
+        body = str(issue.get("body", "")).strip()
+        number = str(issue.get("number", "")).strip()
+
+        lines = ["Input mode: github_issue"]
+        if url:
+            lines.append(f"Issue URL: {url}")
+        if number:
+            lines.append(f"Issue Number: {number}")
+        if title:
+            lines.append(f"Issue Title: {title}")
+        if body:
+            lines.append("Issue Body:")
+            lines.append(body)
+
+        lines.extend(
+            [
+                "Treat the issue details as the source of truth for requirements.",
+                "If details are ambiguous, make the smallest safe implementation that still resolves the issue.",
+            ]
+        )
+        return "\n".join(lines)
+
+    if mode != "plain_task":
+        raise ValueError(f"unsupported input_mode: {input_mode!r}")
+
+    plain_instruction = instruction.strip()
+    if not plain_instruction:
+        raise ValueError("plain_task mode requires a non-empty instruction")
+
+    return f"Input mode: plain_task\nTask request:\n{plain_instruction}"
 
 
 def _render_template_file(relative_path: str, context: dict[str, str]) -> str:

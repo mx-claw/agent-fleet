@@ -33,10 +33,24 @@ Current layers:
 
 ## CLI
 
-Queue a task:
+Queue a plain task:
 
 ```bash
-agent-fleet enqueue --working-dir /path/to/repo --task-type feature_implementation --instruction "Update failing tests and open a PR"
+agent-fleet enqueue \
+  --working-dir /path/to/repo \
+  --task-type feature_implementation \
+  --instruction "Update failing tests and open a PR"
+```
+
+Queue a GitHub issue task:
+
+```bash
+agent-fleet enqueue \
+  --working-dir /path/to/repo \
+  --task-type feature_implementation \
+  --github-issue-url "https://github.com/acme/repo/issues/42" \
+  --github-issue-title "Add idempotency to webhook processing" \
+  --github-issue-body "Duplicate deliveries create duplicate records"
 ```
 
 Run orchestrator in foreground:
@@ -62,6 +76,10 @@ agent-fleet events --task-id <task-id> --tail 100
 ## Prompt Policy Behavior
 
 Prompts are loaded from single-file Markdown templates under `agent_fleet/prompts/templates/` and selected by `task_type` (for example `feature_implementation.md`).
+
+Each prompt receives richer task background context and supports two input modes:
+- `plain_task` (direct instruction)
+- `github_issue` (issue URL/title/body/number context)
 
 Current task types:
 - `feature_implementation`

@@ -39,7 +39,11 @@ def main(ctx: click.Context, database_path: str, runtime_dir: str) -> None:
 
 @main.command()
 @click.option("--working-dir", required=True, type=click.Path(path_type=Path))
-@click.option("--instruction", required=True, type=str)
+@click.option("--instruction", required=False, type=str)
+@click.option("--github-issue-url", required=False, type=str)
+@click.option("--github-issue-title", required=False, type=str)
+@click.option("--github-issue-body", required=False, type=str)
+@click.option("--github-issue-number", required=False, type=int)
 @click.option(
     "--task-type",
     default="feature_implementation",
@@ -47,15 +51,29 @@ def main(ctx: click.Context, database_path: str, runtime_dir: str) -> None:
     show_default=True,
 )
 @click.pass_context
-def enqueue(ctx: click.Context, working_dir: Path, instruction: str, task_type: str) -> None:
+def enqueue(
+    ctx: click.Context,
+    working_dir: Path,
+    instruction: str | None,
+    github_issue_url: str | None,
+    github_issue_title: str | None,
+    github_issue_body: str | None,
+    github_issue_number: int | None,
+    task_type: str,
+) -> None:
+    payload = _build_enqueue_payload(
+        working_dir=working_dir,
+        instruction=instruction,
+        github_issue_url=github_issue_url,
+        github_issue_title=github_issue_title,
+        github_issue_body=github_issue_body,
+        github_issue_number=github_issue_number,
+        task_type=task_type,
+    )
+
     repository = _repository(ctx)
     queue = FIFOQueue(repository)
-    task = queue.enqueue(
-        kind="codex",
-        payload=json.dumps(
-            {"working_dir": str(working_dir), "instruction": instruction.strip(), "task_type": task_type.lower()}
-        ),
-    )
+    task = queue.enqueue(kind="codex", payload=json.dumps(payload))
     Console().print(f"queued task {task.id}")
 
 
@@ -238,6 +256,61 @@ def events(ctx: click.Context, task_id: str, tail: int) -> None:
 def history(ctx: click.Context, task_id: str, tail: int) -> None:
     """Deprecated alias for `events --task-id`"""
     ctx.invoke(events, task_id=task_id, tail=tail)
+
+
+def _build_enqueue_payload(
+    *,
+    working_dir: Path,
+    instruction: str | None,
+    github_issue_url: str | None,
+    github_issue_title: str | None,
+    github_issue_body: str | None,
+    github_issue_number: int | None,
+    task_type: str,
+) -> dict[str, object]:
+    plain_instruction = (instruction or "").strip()
+    issue_url = (github_issue_url or "").strip()
+    issue_title = (github_issue_title or "").strip()
+    issue_body = (github_issue_body or "").strip()
+    issue_mode = any([issue_url, issue_title, issue_body, github_issue_number is not None])
+
+    if plain_instruction and issue_mode:
+        raise click.ClickException(
+            "Provide either a plain --instruction OR github issue fields, not both."
+        )
+
+    if not plain_instruction and not issue_mode:
+        raise click.ClickException(
+            "Provide either --instruction OR github issue fields (--github-issue-url/--github-issue-title/--github-issue-body)."
+        )
+
+    if issue_mode:
+        if not issue_url:
+            raise click.ClickException("--github-issue-url is required for github issue mode")
+        if not issue_title and not issue_body:
+            raise click.ClickException(
+                "Provide at least one of --github-issue-title or --github-issue-body in github issue mode"
+            )
+        return {
+            "working_dir": str(working_dir),
+            "task_type": task_type.lower(),
+            "input_mode": "github_issue",
+            "instruction": "",
+            "github_issue": {
+                "url": issue_url,
+                "title": issue_title,
+                "body": issue_body,
+                "number": github_issue_number,
+            },
+        }
+
+    return {
+        "working_dir": str(working_dir),
+        "task_type": task_type.lower(),
+        "input_mode": "plain_task",
+        "instruction": plain_instruction,
+        "github_issue": None,
+    }
 
 
 def _config(ctx: click.Context) -> AppConfig:
