@@ -25,8 +25,8 @@ Current layers:
 - `agent_fleet/persistence/schema.py`: SQLModel metadata bootstrap + SQLite migration/backfill helpers
 - `agent_fleet/persistence/repository.py`: SQLModel session-based repository (no manual row mapping)
 - `agent_fleet/queue/fifo.py`: FIFO queue API built on the repository layer
-- `agent_fleet/prompts/policy.py`: prompt assembler that loads reviewable Markdown templates by task type
-- `agent_fleet/prompts/templates/`: task-type specific prompt templates
+- `agent_fleet/prompts/policy.py`: prompt assembler that loads one reviewable Markdown template per task type
+- `agent_fleet/prompts/templates/`: task-type prompt files (for example `feature_implementation.md`)
 - `agent_fleet/agents/codex_runner.py`: Codex adapter (`codex exec --json`) with streamed event persistence
 - `agent_fleet/orchestrator/service.py`: orchestrator worker loop with graceful stop
 - `agent_fleet/cli.py`: Click + Rich lifecycle and queue commands
@@ -61,7 +61,7 @@ agent-fleet events --task-id <task-id> --tail 100
 
 ## Prompt Policy Behavior
 
-Prompts are loaded from Markdown templates under `agent_fleet/prompts/templates/` and selected by `task_type`.
+Prompts are loaded from single-file Markdown templates under `agent_fleet/prompts/templates/` and selected by `task_type` (for example `feature_implementation.md`).
 
 Current task types:
 - `feature_implementation`

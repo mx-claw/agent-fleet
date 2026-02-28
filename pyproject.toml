@@ -27,5 +27,5 @@ testpaths = ["tests"]
 
 [tool.setuptools.package-data]
 "agent_fleet.prompts" = [
-  "templates/feature_implementation/*.md",
+  "templates/*.md",
 ]
