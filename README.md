@@ -53,6 +53,16 @@ agent-fleet enqueue \
   --github-issue-body "Duplicate deliveries create duplicate records"
 ```
 
+Fetch issue details directly via GitHub CLI (`gh`):
+
+```bash
+agent-fleet enqueue-from-issue \
+  --working-dir /path/to/repo \
+  --repo acme/repo \
+  --issue 42 \
+  --task-type feature_implementation
+```
+
 Run orchestrator in foreground:
 
 ```bash
@@ -129,6 +139,7 @@ docker run --rm \
 Notes:
 - Codex auth/settings are expected from host (`~/.codex` mount + env vars).
 - Mount repositories under `/workspace` and enqueue tasks with those paths.
+- `enqueue-from-issue` requires authenticated `gh` CLI access to the target repository.
 
 ## Legacy Archival
 

@@ -77,6 +77,42 @@ def enqueue(
     Console().print(f"queued task {task.id}")
 
 
+@main.command(name="enqueue-from-issue")
+@click.option("--working-dir", required=True, type=click.Path(path_type=Path))
+@click.option("--repo", required=True, help="GitHub repository in owner/repo format")
+@click.option("--issue", "issue_number", required=True, type=int)
+@click.option(
+    "--task-type",
+    default="feature_implementation",
+    type=click.Choice(task_type_choices(), case_sensitive=False),
+    show_default=True,
+)
+@click.pass_context
+def enqueue_from_issue(
+    ctx: click.Context,
+    working_dir: Path,
+    repo: str,
+    issue_number: int,
+    task_type: str,
+) -> None:
+    issue = _fetch_github_issue(repo=repo, issue_number=issue_number)
+    payload = _build_enqueue_payload(
+        working_dir=working_dir,
+        instruction=None,
+        github_issue_url=issue.get("url"),
+        github_issue_title=issue.get("title"),
+        github_issue_body=issue.get("body"),
+        github_issue_number=issue.get("number") if isinstance(issue.get("number"), int) else issue_number,
+        task_type=task_type,
+    )
+
+    repository = _repository(ctx)
+    queue = FIFOQueue(repository)
+    task = queue.enqueue(kind="codex", payload=json.dumps(payload))
+    issue_ref = issue.get("url") or f"{repo}#{issue_number}"
+    Console().print(f"queued task {task.id} from issue {issue_ref}")
+
+
 @main.command()
 @click.option("--poll-interval", default=1.0, show_default=True, type=float)
 @click.option("--pid-file", default=None, type=click.Path(path_type=Path))
@@ -256,6 +292,50 @@ def events(ctx: click.Context, task_id: str, tail: int) -> None:
 def history(ctx: click.Context, task_id: str, tail: int) -> None:
     """Deprecated alias for `events --task-id`"""
     ctx.invoke(events, task_id=task_id, tail=tail)
+
+
+def _fetch_github_issue(*, repo: str, issue_number: int) -> dict[str, object]:
+    command = [
+        "gh",
+        "issue",
+        "view",
+        str(issue_number),
+        "--repo",
+        repo,
+        "--json",
+        "number,title,body,url",
+    ]
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        error_text = (result.stderr or result.stdout).strip() or "unknown gh error"
+        raise click.ClickException(
+            f"failed to fetch github issue {repo}#{issue_number}: {error_text}"
+        )
+
+    raw = result.stdout.strip()
+    if not raw:
+        raise click.ClickException(
+            f"gh returned an empty response for issue {repo}#{issue_number}"
+        )
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise click.ClickException(
+            f"gh returned invalid JSON for issue {repo}#{issue_number}"
+        ) from error
+
+    if not isinstance(payload, dict):
+        raise click.ClickException(
+            f"gh returned unexpected issue shape for {repo}#{issue_number}"
+        )
+
+    return {
+        "url": str(payload.get("url", "")).strip(),
+        "title": str(payload.get("title", "")).strip(),
+        "body": str(payload.get("body", "")).strip(),
+        "number": payload.get("number", issue_number),
+    }
 
 
 def _build_enqueue_payload(
