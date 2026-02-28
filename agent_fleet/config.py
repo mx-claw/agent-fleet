@@ -13,6 +13,10 @@ class AppConfig:
     def pid_file_path(self) -> Path:
         return self.runtime_dir / "orchestrator.pid"
 
+    @property
+    def log_file_path(self) -> Path:
+        return self.runtime_dir / "orchestrator.log"
+
     @classmethod
     def from_paths(
         cls,

@@ -42,14 +42,17 @@ class OrchestratorService:
         try:
             payload = json.loads(task_payload)
             working_dir = Path(payload["working_dir"])
-            instruction = payload["instruction"]
+            instruction = str(payload["instruction"])
+            if not working_dir.exists() or not working_dir.is_dir():
+                raise ValueError(f"working_dir does not exist: {working_dir}")
+
             prompt = build_prompt(instruction, working_dir=working_dir)
             result = self.codex_runner.run(
                 execution_id=execution.id,
                 prompt=prompt,
                 working_dir=working_dir,
             )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             self.repository.append_execution_event(
                 execution_id=execution.id,
                 sequence_number=1,

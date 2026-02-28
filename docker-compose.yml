@@ -1,0 +1,18 @@
+services:
+  agent-fleet:
+    build:
+      context: .
+    image: agent-fleet:dev
+    command: ["run"]
+    environment:
+      AGENT_FLEET_DATABASE: /data/agent_fleet.db
+      AGENT_FLEET_RUNTIME_DIR: /data/runtime
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CODEX_API_KEY: ${CODEX_API_KEY:-}
+      HOME: /home/agent
+    volumes:
+      - ./data:/data
+      - ./repos:/workspace
+      - ${HOME}/.codex:/home/agent/.codex
+      - ${HOME}/.ssh:/home/agent/.ssh:ro
+      - ${HOME}/.gitconfig:/home/agent/.gitconfig:ro

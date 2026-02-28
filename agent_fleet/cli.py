@@ -38,15 +38,15 @@ def main(ctx: click.Context, database_path: str, runtime_dir: str) -> None:
 
 @main.command()
 @click.option("--working-dir", required=True, type=click.Path(path_type=Path))
-@click.argument("instruction", nargs=-1, required=True)
+@click.option("--instruction", required=True, type=str)
 @click.pass_context
-def enqueue(ctx: click.Context, working_dir: Path, instruction: tuple[str, ...]) -> None:
+def enqueue(ctx: click.Context, working_dir: Path, instruction: str) -> None:
     repository = _repository(ctx)
     queue = FIFOQueue(repository)
     task = queue.enqueue(
         kind="codex",
         payload=json.dumps(
-            {"working_dir": str(working_dir), "instruction": " ".join(instruction)}
+            {"working_dir": str(working_dir), "instruction": instruction.strip()}
         ),
     )
     Console().print(f"queued task {task.id}")
@@ -100,6 +100,8 @@ def start(ctx: click.Context, poll_interval: float) -> None:
         if existing_pid is not None:
             release_pid_file(config.pid_file_path)
 
+        config.runtime_dir.mkdir(parents=True, exist_ok=True)
+        log_handle = config.log_file_path.open("a", encoding="utf-8")
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -117,15 +119,17 @@ def start(ctx: click.Context, poll_interval: float) -> None:
             ],
             cwd=Path.cwd(),
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
             start_new_session=True,
         )
+        log_handle.close()
         _wait_for_pid_file(config.pid_file_path, expected_pid=process.pid)
     except RuntimeStateError as error:
         raise click.ClickException(str(error)) from error
 
     console.print(f"started orchestrator pid {process.pid}")
+    console.print(f"log file: {config.log_file_path}")
 
 
 @main.command()
@@ -166,6 +170,7 @@ def status(ctx: click.Context, limit: int) -> None:
     lifecycle.add_row("Database", str(config.database_path))
     lifecycle.add_row("Runtime Dir", str(config.runtime_dir))
     lifecycle.add_row("PID File", str(config.pid_file_path))
+    lifecycle.add_row("Log File", str(config.log_file_path))
     lifecycle.add_row("Running", "yes" if pid is not None and is_process_running(pid) else "no")
     lifecycle.add_row("PID", str(pid) if pid is not None else "-")
     console.print(lifecycle)
@@ -182,11 +187,13 @@ def status(ctx: click.Context, limit: int) -> None:
 
 
 @main.command()
-@click.argument("task_id")
+@click.option("--task-id", required=True)
+@click.option("--tail", default=50, show_default=True, type=int)
 @click.pass_context
-def history(ctx: click.Context, task_id: str) -> None:
+def events(ctx: click.Context, task_id: str, tail: int) -> None:
     repository = _repository(ctx)
     console = Console()
+
     history_data = repository.get_task_history(task_id)
     if history_data is None:
         raise click.ClickException(f"task {task_id} not found")
@@ -195,31 +202,35 @@ def history(ctx: click.Context, task_id: str) -> None:
     assert not isinstance(task, dict)
     console.print(Panel.fit(f"{task.id}\nstatus={task.status.value}\nkind={task.kind}", title="task"))
 
+    all_rows: list[tuple[str, int, str, str, str]] = []
     for item in history_data["executions"]:
         execution = item["execution"]
-        event_table = Table(title=f"execution {execution.id}")
-        event_table.add_column("Seq")
-        event_table.add_column("Source")
-        event_table.add_column("Type")
-        event_table.add_column("Payload")
         for event in item["events"]:
-            event_table.add_row(
-                str(event.sequence_number),
-                event.source,
-                event.event_type,
-                event.payload,
-            )
-        console.print(
-            Panel.fit(
-                (
-                    f"status={execution.status.value}\n"
-                    f"process_id={execution.process_id}\n"
-                    f"exit_code={execution.exit_code}"
-                ),
-                title=f"execution {execution.id}",
-            )
-        )
-        console.print(event_table)
+            all_rows.append((execution.id, event.sequence_number, event.source, event.event_type, event.payload))
+
+    if tail > 0:
+        all_rows = all_rows[-tail:]
+
+    event_table = Table(title="events")
+    event_table.add_column("Execution")
+    event_table.add_column("Seq")
+    event_table.add_column("Source")
+    event_table.add_column("Type")
+    event_table.add_column("Payload")
+
+    for execution_id, seq, source, event_type, payload in all_rows:
+        event_table.add_row(execution_id, str(seq), source, event_type, payload)
+
+    console.print(event_table)
+
+
+@main.command(hidden=True)
+@click.argument("task_id")
+@click.option("--tail", default=50, show_default=True, type=int)
+@click.pass_context
+def history(ctx: click.Context, task_id: str, tail: int) -> None:
+    """Deprecated alias for `events --task-id`"""
+    ctx.invoke(events, task_id=task_id, tail=tail)
 
 
 def _config(ctx: click.Context) -> AppConfig:

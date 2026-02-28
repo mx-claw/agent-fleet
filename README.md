@@ -12,83 +12,98 @@ Open-source Python orchestrator for running a fleet of background coding agents 
 
 ## Status
 
-This repository is a ground-up rewrite of earlier GitHub workflow automation experiments.
+This repository is the clean rewrite of earlier GitHub workflow automation experiments.
 
 ## Architecture
 
 Current layers:
 
-- `agent_fleet/config.py`: application configuration model for local paths and runtime settings
-- `agent_fleet/domain/models.py`: shared domain types for tasks, executions, events, and task status values
-- `agent_fleet/persistence/schema.py`: SQLite schema creation for `tasks`, `executions`, and `execution_events`
-- `agent_fleet/persistence/repository.py`: repository layer for task enqueue/dequeue, execution lifecycle updates, history queries, and event persistence
+- `agent_fleet/config.py`: application configuration model for runtime paths
+- `agent_fleet/domain/models.py`: shared domain types for tasks, executions, and execution events
+- `agent_fleet/persistence/schema.py`: SQLite schema + migration-safe column backfills
+- `agent_fleet/persistence/repository.py`: queue persistence, lifecycle updates, event storage, history queries
 - `agent_fleet/queue/fifo.py`: FIFO queue API built on the repository layer
-- `agent_fleet/prompts/policy.py`: prompt policy builder that injects git commit/push/PR instructions when applicable
-- `agent_fleet/agents/codex_runner.py`: Codex adapter that launches `codex --output-format stream-json` and persists streamed events
-- `agent_fleet/orchestrator/service.py`: foreground orchestrator loop with graceful stop handling
-- `agent_fleet/cli.py`: Click/Rich CLI for queue submission, lifecycle control, status, and history inspection
-
-## Implemented Scope
-
-This step now covers the main orchestrator lifecycle:
-
-- package structure for queue, persistence, domain, config, prompts, agent adapters, orchestrator, and CLI concerns
-- SQLite persistence using the standard library `sqlite3` module
-- FIFO queue semantics for enqueuing and dequeuing queued tasks
-- a foreground orchestrator loop with graceful stop via `threading.Event`
-- background lifecycle commands using a runtime directory and pid file
-- Codex execution tracking with persisted event replay data
-- focused tests for schema initialization, FIFO ordering, policy composition, event parsing/storage, and pid-file behavior
-
-## Legacy Review (from previous workflow scripts)
-
-Key issues identified in legacy implementation:
-
-1. Hard-coded absolute paths to one machine/workspace
-2. Business logic coupled to GitHub event handling and subprocess dispatch
-3. Weak lifecycle controls (no robust daemon start/stop semantics)
-4. Limited observability (flat logs, little structured event persistence)
-5. Queue and job types mixed with execution concerns
-
-This rewrite addresses these with a modular Python architecture.
+- `agent_fleet/prompts/policy.py`: prompt policy builder (commit/push/PR behavior in git repos)
+- `agent_fleet/agents/codex_runner.py`: Codex adapter (`codex exec --json`) with streamed event persistence
+- `agent_fleet/orchestrator/service.py`: orchestrator worker loop with graceful stop
+- `agent_fleet/cli.py`: Click + Rich lifecycle and queue commands
 
 ## CLI
 
-Submit a task:
+Queue a task:
 
 ```bash
-agent-fleet enqueue --working-dir /path/to/repo "Update the failing tests and open a PR"
+agent-fleet enqueue --working-dir /path/to/repo --instruction "Update failing tests and open a PR"
 ```
 
-Run the orchestrator in the foreground:
+Run orchestrator in foreground:
 
 ```bash
 agent-fleet run
 ```
 
-Start or stop the background orchestrator:
+Start/stop background orchestrator:
 
 ```bash
 agent-fleet start
 agent-fleet stop
 ```
 
-Inspect runtime state and task history:
+Inspect queue/runtime:
 
 ```bash
 agent-fleet status
-agent-fleet history <task-id>
+agent-fleet events --task-id <task-id> --tail 100
 ```
 
-## Lifecycle
+## Prompt Policy Behavior
 
-- Tasks are stored as JSON payloads containing `working_dir` and `instruction`.
-- The orchestrator polls the FIFO queue, marks one task `running`, creates an execution record, and dispatches Codex.
-- `start` launches a detached background process and waits for a pid file in the configured runtime directory.
-- `stop` sends `SIGTERM`, allowing the foreground loop to exit cleanly and remove its pid file.
+When the target `working_dir` is a git repository, the generated task prompt enforces:
 
-## Observability
+1. commit all relevant changes
+2. push to remote when configured/possible
+3. create a PR/MR when the remote workflow supports it
 
-- `executions` records include `process_id`, `exit_code`, timestamps, and status transitions.
-- `execution_events` records include a per-execution `sequence_number`, `source` (`stdout`, `stderr`, `json`, or `system`), normalized `event_type`, and stored payload.
-- `agent-fleet history <task-id>` replays the stored execution history directly from SQLite.
+## Observability & Database
+
+- `tasks`: queue item + lifecycle state
+- `executions`: process tracking (`process_id`, `exit_code`, status, timestamps)
+- `execution_events`: replayable stream (`sequence_number`, `source`, `event_type`, `payload`)
+
+Event `source` values:
+- `json`: parsed JSON line from Codex stream
+- `stdout`: non-JSON stdout line
+- `stderr`: non-JSON stderr line
+- `system`: orchestrator-generated internal events/errors
+
+## Docker Runtime
+
+### Build
+
+```bash
+docker build -t agent-fleet:dev .
+```
+
+### Run (foreground orchestrator)
+
+```bash
+docker run --rm \
+  -e OPENAI_API_KEY \
+  -e CODEX_API_KEY \
+  -e AGENT_FLEET_DATABASE=/data/agent_fleet.db \
+  -e AGENT_FLEET_RUNTIME_DIR=/data/runtime \
+  -v "$PWD/data:/data" \
+  -v "$PWD:/workspace" \
+  -v "$HOME/.codex:/home/agent/.codex" \
+  -v "$HOME/.ssh:/home/agent/.ssh:ro" \
+  -v "$HOME/.gitconfig:/home/agent/.gitconfig:ro" \
+  agent-fleet:dev run
+```
+
+Notes:
+- Codex auth/settings are expected from host (`~/.codex` mount + env vars).
+- Mount repositories under `/workspace` and enqueue tasks with those paths.
+
+## Legacy Archival
+
+See `docs/legacy-archive.md` for the archived design context and migration notes from prior workflow scripts.

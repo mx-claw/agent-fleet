@@ -9,14 +9,22 @@ def build_prompt(instruction: str, *, working_dir: str | Path) -> str:
     policy_lines = [
         "Mandatory policy:",
         "- Complete the requested work in the provided working directory.",
+        "- Do not stop at planning. Make concrete file changes when requested.",
     ]
 
     if _is_git_repo(path):
-        policy_lines.append("- Before finishing, commit all changes in the repository.")
+        policy_lines.extend(
+            [
+                "- This is a git repository: stage all relevant changes and create a commit.",
+                "- Use a clear commit message that describes the actual change.",
+            ]
+        )
         if _has_remote(path):
-            policy_lines.append("- Push the commit to the configured remote.")
+            policy_lines.append("- Push your branch to the configured remote if push permissions exist.")
             if _suggests_pull_request_workflow(path):
-                policy_lines.append("- If the remote workflow supports it, create a pull request for the change.")
+                policy_lines.append(
+                    "- If the remote supports pull requests/merge requests, create one with a concise summary."
+                )
 
     policy_block = "\n".join(policy_lines)
     return f"{policy_block}\n\nTask instruction:\n{instruction.strip()}\n"
@@ -47,4 +55,3 @@ def _run_git(working_dir: Path, *args: str) -> str:
     if completed.returncode != 0:
         return ""
     return completed.stdout.strip()
-

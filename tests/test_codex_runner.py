@@ -47,3 +47,29 @@ def test_codex_runner_persists_json_and_raw_events(tmp_path) -> None:
         event.source == "stderr" and event.event_type == "raw_text" and event.payload == "stderr raw line"
         for event in events
     )
+
+
+def test_codex_runner_adds_skip_git_repo_check_outside_git(tmp_path) -> None:
+    codex_path = tmp_path / "codex"
+    codex_path.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "printf '%s\\n' \"$*\"",
+            ]
+        )
+        + "\n",
+        encoding="ascii",
+    )
+    os.chmod(codex_path, 0o755)
+
+    repository = SQLiteRepository(tmp_path / "runner2.db")
+    repository.initialize()
+    task = repository.enqueue_task(kind="codex", payload="{}")
+    execution = repository.create_execution(task_id=task.id, agent_name="codex")
+
+    runner = CodexRunner(repository, command=(str(codex_path), "exec", "--json"))
+    runner.run(execution_id=execution.id, prompt="do work", working_dir=tmp_path)
+
+    events = repository.list_execution_events(execution.id)
+    assert any("--skip-git-repo-check" in event.payload for event in events)

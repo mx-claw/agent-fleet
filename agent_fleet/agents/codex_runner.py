@@ -18,11 +18,13 @@ class CodexRunResult:
 
 
 class CodexRunner:
+    """Adapter that runs Codex and persists streamed execution events."""
+
     def __init__(
         self,
         repository: SQLiteRepository,
         *,
-        command: Sequence[str] = ("codex",),
+        command: Sequence[str] = ("codex", "exec", "--json"),
     ) -> None:
         self.repository = repository
         self.command = tuple(command)
@@ -34,9 +36,19 @@ class CodexRunner:
         prompt: str,
         working_dir: str | Path,
     ) -> CodexRunResult:
+        working_dir_path = Path(working_dir)
+        command = [*self.command]
+
+        # Allow execution outside git when needed; policy prompt still enforces
+        # commit/push/PR behavior when inside git repositories.
+        if not _is_git_repo(working_dir_path) and _looks_like_codex_command(command):
+            command.append("--skip-git-repo-check")
+
+        command.append(prompt)
+
         process = subprocess.Popen(
-            [*self.command, "--output-format", "stream-json", prompt],
-            cwd=Path(working_dir),
+            command,
+            cwd=working_dir_path,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
@@ -136,3 +148,20 @@ def _normalize_event_type(value: str) -> str:
             normalized.append("_")
     return "".join(normalized).strip("_") or "json_event"
 
+
+def _is_git_repo(path: Path) -> bool:
+    result = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def _looks_like_codex_command(command: Sequence[str]) -> bool:
+    if not command:
+        return False
+    binary = Path(command[0]).name
+    return binary == "codex"
