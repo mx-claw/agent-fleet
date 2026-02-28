@@ -1,12 +1,15 @@
 import sqlite3
 
-from agent_fleet.persistence.schema import initialize_schema
+from agent_fleet.persistence.schema import create_sqlite_engine, initialize_schema
 
 
-def test_initialize_schema_creates_expected_tables() -> None:
-    connection = sqlite3.connect(":memory:")
+def test_initialize_schema_creates_expected_tables(tmp_path) -> None:
+    db_path = tmp_path / "schema.db"
+    engine = create_sqlite_engine(db_path)
 
-    initialize_schema(connection)
+    initialize_schema(engine)
+
+    connection = sqlite3.connect(db_path)
 
     table_names = {
         row[0]

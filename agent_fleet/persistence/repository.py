@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import sqlite3
-from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+
+from sqlmodel import Session, select
 
 from agent_fleet.domain.models import Execution, ExecutionEvent, Task, TaskStatus
-from agent_fleet.persistence.schema import initialize_schema
+from agent_fleet.persistence.schema import create_sqlite_engine, initialize_schema
 
 
 def utc_now() -> str:
@@ -17,73 +16,47 @@ def utc_now() -> str:
 class SQLiteRepository:
     def __init__(self, database_path: str | Path):
         self.database_path = Path(database_path)
+        self.engine = create_sqlite_engine(self.database_path)
 
     def initialize(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.connection() as connection:
-            initialize_schema(connection)
-
-    @contextmanager
-    def connection(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        try:
-            yield connection
-            connection.commit()
-        finally:
-            connection.close()
+        initialize_schema(self.engine)
 
     def enqueue_task(self, *, kind: str, payload: str) -> Task:
-        task_id = str(uuid4())
         timestamp = utc_now()
-        with self.connection() as connection:
-            connection.execute(
-                """
-                INSERT INTO tasks (
-                    id, kind, payload, status, created_at, updated_at, queued_at, started_at, finished_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)
-                """,
-                (
-                    task_id,
-                    kind,
-                    payload,
-                    TaskStatus.QUEUED.value,
-                    timestamp,
-                    timestamp,
-                    timestamp,
-                ),
-            )
-            row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-        return self._row_to_task(row)
+        task = Task(
+            kind=kind,
+            payload=payload,
+            status=TaskStatus.QUEUED,
+            created_at=timestamp,
+            updated_at=timestamp,
+            queued_at=timestamp,
+        )
+        with Session(self.engine) as session:
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+        return task
 
     def dequeue_next_task(self) -> Task | None:
-        with self.connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                """
-                SELECT *
-                FROM tasks
-                WHERE status = ?
-                ORDER BY queued_at ASC, id ASC
-                LIMIT 1
-                """,
-                (TaskStatus.QUEUED.value,),
-            ).fetchone()
-            if row is None:
+        with Session(self.engine) as session:
+            task = session.exec(
+                select(Task)
+                .where(Task.status == TaskStatus.QUEUED)
+                .order_by(Task.queued_at.asc(), Task.id.asc())
+                .limit(1)
+            ).first()
+            if task is None:
                 return None
 
             started_at = utc_now()
-            connection.execute(
-                """
-                UPDATE tasks
-                SET status = ?, updated_at = ?, started_at = ?
-                WHERE id = ?
-                """,
-                (TaskStatus.RUNNING.value, started_at, started_at, row["id"]),
-            )
-            updated_row = connection.execute("SELECT * FROM tasks WHERE id = ?", (row["id"],)).fetchone()
-        return self._row_to_task(updated_row)
+            task.status = TaskStatus.RUNNING
+            task.updated_at = started_at
+            task.started_at = started_at
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+            return task
 
     def mark_task_succeeded(self, task_id: str) -> Task:
         return self._update_task_status(task_id, TaskStatus.SUCCEEDED)
@@ -95,57 +68,41 @@ class SQLiteRepository:
         return self._update_task_status(task_id, TaskStatus.CANCELED)
 
     def get_task(self, task_id: str) -> Task | None:
-        with self.connection() as connection:
-            row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-        return self._row_to_task(row) if row else None
+        with Session(self.engine) as session:
+            return session.get(Task, task_id)
 
     def list_tasks(self, *, limit: int = 20) -> list[Task]:
-        with self.connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT *
-                FROM tasks
-                ORDER BY created_at DESC, id DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
-        return [self._row_to_task(row) for row in rows]
+        with Session(self.engine) as session:
+            return list(
+                session.exec(
+                    select(Task).order_by(Task.created_at.desc(), Task.id.desc()).limit(limit)
+                )
+            )
 
     def create_execution(self, *, task_id: str, agent_name: str) -> Execution:
-        execution_id = str(uuid4())
-        timestamp = utc_now()
-        with self.connection() as connection:
-            connection.execute(
-                """
-                INSERT INTO executions (
-                    id, task_id, agent_name, status, process_id, exit_code, created_at, started_at, finished_at
-                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, NULL)
-                """,
-                (
-                    execution_id,
-                    task_id,
-                    agent_name,
-                    TaskStatus.QUEUED.value,
-                    timestamp,
-                ),
-            )
-            row = connection.execute("SELECT * FROM executions WHERE id = ?", (execution_id,)).fetchone()
-        return self._row_to_execution(row)
+        execution = Execution(
+            task_id=task_id,
+            agent_name=agent_name,
+            status=TaskStatus.QUEUED,
+            created_at=utc_now(),
+        )
+        with Session(self.engine) as session:
+            session.add(execution)
+            session.commit()
+            session.refresh(execution)
+        return execution
 
     def mark_execution_running(self, *, execution_id: str, process_id: int | None) -> Execution:
-        timestamp = utc_now()
-        with self.connection() as connection:
-            connection.execute(
-                """
-                UPDATE executions
-                SET status = ?, process_id = ?, started_at = ?, finished_at = NULL
-                WHERE id = ?
-                """,
-                (TaskStatus.RUNNING.value, process_id, timestamp, execution_id),
-            )
-            row = connection.execute("SELECT * FROM executions WHERE id = ?", (execution_id,)).fetchone()
-        return self._row_to_execution(row)
+        with Session(self.engine) as session:
+            execution = self._require_execution(session, execution_id)
+            execution.status = TaskStatus.RUNNING
+            execution.process_id = process_id
+            execution.started_at = utc_now()
+            execution.finished_at = None
+            session.add(execution)
+            session.commit()
+            session.refresh(execution)
+            return execution
 
     def mark_execution_succeeded(self, *, execution_id: str, exit_code: int) -> Execution:
         return self._finish_execution(
@@ -162,22 +119,18 @@ class SQLiteRepository:
         )
 
     def get_execution(self, execution_id: str) -> Execution | None:
-        with self.connection() as connection:
-            row = connection.execute("SELECT * FROM executions WHERE id = ?", (execution_id,)).fetchone()
-        return self._row_to_execution(row) if row else None
+        with Session(self.engine) as session:
+            return session.get(Execution, execution_id)
 
     def list_executions_for_task(self, task_id: str) -> list[Execution]:
-        with self.connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT *
-                FROM executions
-                WHERE task_id = ?
-                ORDER BY created_at ASC, id ASC
-                """,
-                (task_id,),
-            ).fetchall()
-        return [self._row_to_execution(row) for row in rows]
+        with Session(self.engine) as session:
+            return list(
+                session.exec(
+                    select(Execution)
+                    .where(Execution.task_id == task_id)
+                    .order_by(Execution.created_at.asc(), Execution.id.asc())
+                )
+            )
 
     def append_execution_event(
         self,
@@ -188,35 +141,29 @@ class SQLiteRepository:
         event_type: str,
         payload: str,
     ) -> ExecutionEvent:
-        timestamp = utc_now()
-        with self.connection() as connection:
-            cursor = connection.execute(
-                """
-                INSERT INTO execution_events (
-                    execution_id, sequence_number, source, event_type, payload, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (execution_id, sequence_number, source, event_type, payload, timestamp),
-            )
-            row = connection.execute(
-                "SELECT * FROM execution_events WHERE id = ?",
-                (cursor.lastrowid,),
-            ).fetchone()
-        return self._row_to_execution_event(row)
+        event = ExecutionEvent(
+            execution_id=execution_id,
+            sequence_number=sequence_number,
+            source=source,
+            event_type=event_type,
+            payload=payload,
+            created_at=utc_now(),
+        )
+        with Session(self.engine) as session:
+            session.add(event)
+            session.commit()
+            session.refresh(event)
+        return event
 
     def list_execution_events(self, execution_id: str) -> list[ExecutionEvent]:
-        with self.connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT *
-                FROM execution_events
-                WHERE execution_id = ?
-                ORDER BY sequence_number ASC, id ASC
-                """,
-                (execution_id,),
-            ).fetchall()
-        return [self._row_to_execution_event(row) for row in rows]
+        with Session(self.engine) as session:
+            return list(
+                session.exec(
+                    select(ExecutionEvent)
+                    .where(ExecutionEvent.execution_id == execution_id)
+                    .order_by(ExecutionEvent.sequence_number.asc(), ExecutionEvent.id.asc())
+                )
+            )
 
     def get_task_history(self, task_id: str) -> dict[str, object] | None:
         task = self.get_task(task_id)
@@ -235,19 +182,17 @@ class SQLiteRepository:
         return {"task": task, "executions": history}
 
     def _update_task_status(self, task_id: str, status: TaskStatus) -> Task:
-        timestamp = utc_now()
-        finished_at = timestamp if status in {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELED} else None
-        with self.connection() as connection:
-            connection.execute(
-                """
-                UPDATE tasks
-                SET status = ?, updated_at = ?, finished_at = COALESCE(?, finished_at)
-                WHERE id = ?
-                """,
-                (status.value, timestamp, finished_at, task_id),
-            )
-            row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-        return self._row_to_task(row)
+        with Session(self.engine) as session:
+            task = self._require_task(session, task_id)
+            timestamp = utc_now()
+            task.status = status
+            task.updated_at = timestamp
+            if status in {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELED}:
+                task.finished_at = timestamp
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+            return task
 
     def _finish_execution(
         self,
@@ -256,55 +201,26 @@ class SQLiteRepository:
         status: TaskStatus,
         exit_code: int | None,
     ) -> Execution:
-        timestamp = utc_now()
-        with self.connection() as connection:
-            connection.execute(
-                """
-                UPDATE executions
-                SET status = ?, exit_code = ?, finished_at = ?
-                WHERE id = ?
-                """,
-                (status.value, exit_code, timestamp, execution_id),
-            )
-            row = connection.execute("SELECT * FROM executions WHERE id = ?", (execution_id,)).fetchone()
-        return self._row_to_execution(row)
+        with Session(self.engine) as session:
+            execution = self._require_execution(session, execution_id)
+            execution.status = status
+            execution.exit_code = exit_code
+            execution.finished_at = utc_now()
+            session.add(execution)
+            session.commit()
+            session.refresh(execution)
+            return execution
 
     @staticmethod
-    def _row_to_task(row: sqlite3.Row) -> Task:
-        return Task(
-            id=row["id"],
-            kind=row["kind"],
-            payload=row["payload"],
-            status=TaskStatus(row["status"]),
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-            queued_at=row["queued_at"],
-            started_at=row["started_at"],
-            finished_at=row["finished_at"],
-        )
+    def _require_task(session: Session, task_id: str) -> Task:
+        task = session.get(Task, task_id)
+        if task is None:
+            raise ValueError(f"task not found: {task_id}")
+        return task
 
     @staticmethod
-    def _row_to_execution(row: sqlite3.Row) -> Execution:
-        return Execution(
-            id=row["id"],
-            task_id=row["task_id"],
-            agent_name=row["agent_name"],
-            status=TaskStatus(row["status"]),
-            created_at=row["created_at"],
-            process_id=row["process_id"],
-            exit_code=row["exit_code"],
-            started_at=row["started_at"],
-            finished_at=row["finished_at"],
-        )
-
-    @staticmethod
-    def _row_to_execution_event(row: sqlite3.Row) -> ExecutionEvent:
-        return ExecutionEvent(
-            id=row["id"],
-            execution_id=row["execution_id"],
-            sequence_number=row["sequence_number"],
-            source=row["source"],
-            event_type=row["event_type"],
-            payload=row["payload"],
-            created_at=row["created_at"],
-        )
+    def _require_execution(session: Session, execution_id: str) -> Execution:
+        execution = session.get(Execution, execution_id)
+        if execution is None:
+            raise ValueError(f"execution not found: {execution_id}")
+        return execution

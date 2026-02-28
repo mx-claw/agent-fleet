@@ -14,14 +14,16 @@ Open-source Python orchestrator for running a fleet of background coding agents 
 
 This repository is the clean rewrite of earlier GitHub workflow automation experiments.
 
+Persistence now uses **SQLModel ORM** for typed entities and session-based data access.
+
 ## Architecture
 
 Current layers:
 
 - `agent_fleet/config.py`: application configuration model for runtime paths
-- `agent_fleet/domain/models.py`: shared domain types for tasks, executions, and execution events
-- `agent_fleet/persistence/schema.py`: SQLite schema + migration-safe column backfills
-- `agent_fleet/persistence/repository.py`: queue persistence, lifecycle updates, event storage, history queries
+- `agent_fleet/domain/models.py`: SQLModel ORM entities (`Task`, `Execution`, `ExecutionEvent`) + `TaskStatus` enum
+- `agent_fleet/persistence/schema.py`: SQLModel metadata bootstrap + SQLite migration/backfill helpers
+- `agent_fleet/persistence/repository.py`: SQLModel session-based repository (no manual row mapping)
 - `agent_fleet/queue/fifo.py`: FIFO queue API built on the repository layer
 - `agent_fleet/prompts/policy.py`: prompt policy builder (commit/push/PR behavior in git repos)
 - `agent_fleet/agents/codex_runner.py`: Codex adapter (`codex exec --json`) with streamed event persistence
