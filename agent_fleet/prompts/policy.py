@@ -1,33 +1,77 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+import re
 import subprocess
 from pathlib import Path
 
+from .task_types import TaskType, normalize_task_type
 
-def build_prompt(instruction: str, *, working_dir: str | Path) -> str:
+_TEMPLATE_PATTERN = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
+_TEMPLATE_ROOT = Path(__file__).parent / "templates"
+
+
+@dataclass(frozen=True, slots=True)
+class PromptTemplateSet:
+    base_templates: tuple[str, ...]
+    git_repo_templates: tuple[str, ...] = ()
+    git_remote_templates: tuple[str, ...] = ()
+    pr_workflow_templates: tuple[str, ...] = ()
+
+
+PROMPT_TEMPLATE_SETS: dict[TaskType, PromptTemplateSet] = {
+    TaskType.FEATURE_IMPLEMENTATION: PromptTemplateSet(
+        base_templates=(
+            "feature_implementation/system.md",
+            "feature_implementation/task.md",
+        ),
+        git_repo_templates=("feature_implementation/git_repo.md",),
+        git_remote_templates=("feature_implementation/git_remote.md",),
+        pr_workflow_templates=("feature_implementation/pr_workflow.md",),
+    ),
+}
+
+
+def build_prompt(*, task_type: str, instruction: str, working_dir: str | Path) -> str:
     path = Path(working_dir)
-    policy_lines = [
-        "Mandatory policy:",
-        "- Complete the requested work in the provided working directory.",
-        "- Do not stop at planning. Make concrete file changes when requested.",
-    ]
+    normalized_task_type = normalize_task_type(task_type)
+    template_set = PROMPT_TEMPLATE_SETS[normalized_task_type]
+
+    context = {
+        "instruction": instruction.strip(),
+        "working_dir": str(path),
+        "task_type": normalized_task_type.value,
+    }
+
+    parts = [_render_template_file(template, context) for template in template_set.base_templates]
 
     if _is_git_repo(path):
-        policy_lines.extend(
-            [
-                "- This is a git repository: stage all relevant changes and create a commit.",
-                "- Use a clear commit message that describes the actual change.",
-            ]
-        )
+        parts.extend(_render_template_file(template, context) for template in template_set.git_repo_templates)
         if _has_remote(path):
-            policy_lines.append("- Push your branch to the configured remote if push permissions exist.")
+            parts.extend(_render_template_file(template, context) for template in template_set.git_remote_templates)
             if _suggests_pull_request_workflow(path):
-                policy_lines.append(
-                    "- If the remote supports pull requests/merge requests, create one with a concise summary."
+                parts.extend(
+                    _render_template_file(template, context)
+                    for template in template_set.pr_workflow_templates
                 )
 
-    policy_block = "\n".join(policy_lines)
-    return f"{policy_block}\n\nTask instruction:\n{instruction.strip()}\n"
+    return "\n\n".join(part.strip() for part in parts if part.strip()) + "\n"
+
+
+def _render_template_file(relative_path: str, context: dict[str, str]) -> str:
+    template_path = _TEMPLATE_ROOT / relative_path
+    template = template_path.read_text(encoding="utf-8")
+    return _render_template(template, context)
+
+
+def _render_template(template: str, context: dict[str, str]) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        key = match.group(1)
+        if key not in context:
+            raise ValueError(f"missing template variable: {key}")
+        return context[key]
+
+    return _TEMPLATE_PATTERN.sub(_replace, template)
 
 
 def _is_git_repo(working_dir: Path) -> bool:

@@ -24,6 +24,7 @@ from .orchestrator.runtime import (
 )
 from .orchestrator.service import OrchestratorService
 from .persistence.repository import SQLiteRepository
+from .prompts.task_types import task_type_choices
 from .queue.fifo import FIFOQueue
 
 
@@ -39,14 +40,20 @@ def main(ctx: click.Context, database_path: str, runtime_dir: str) -> None:
 @main.command()
 @click.option("--working-dir", required=True, type=click.Path(path_type=Path))
 @click.option("--instruction", required=True, type=str)
+@click.option(
+    "--task-type",
+    default="feature_implementation",
+    type=click.Choice(task_type_choices(), case_sensitive=False),
+    show_default=True,
+)
 @click.pass_context
-def enqueue(ctx: click.Context, working_dir: Path, instruction: str) -> None:
+def enqueue(ctx: click.Context, working_dir: Path, instruction: str, task_type: str) -> None:
     repository = _repository(ctx)
     queue = FIFOQueue(repository)
     task = queue.enqueue(
         kind="codex",
         payload=json.dumps(
-            {"working_dir": str(working_dir), "instruction": instruction.strip()}
+            {"working_dir": str(working_dir), "instruction": instruction.strip(), "task_type": task_type.lower()}
         ),
     )
     Console().print(f"queued task {task.id}")

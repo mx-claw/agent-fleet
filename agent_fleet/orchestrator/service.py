@@ -43,10 +43,11 @@ class OrchestratorService:
             payload = json.loads(task_payload)
             working_dir = Path(payload["working_dir"])
             instruction = str(payload["instruction"])
+            task_type = str(payload.get("task_type", "feature_implementation"))
             if not working_dir.exists() or not working_dir.is_dir():
                 raise ValueError(f"working_dir does not exist: {working_dir}")
 
-            prompt = build_prompt(instruction, working_dir=working_dir)
+            prompt = build_prompt(task_type=task_type, instruction=instruction, working_dir=working_dir)
             result = self.codex_runner.run(
                 execution_id=execution.id,
                 prompt=prompt,

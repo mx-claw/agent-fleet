@@ -25,7 +25,8 @@ Current layers:
 - `agent_fleet/persistence/schema.py`: SQLModel metadata bootstrap + SQLite migration/backfill helpers
 - `agent_fleet/persistence/repository.py`: SQLModel session-based repository (no manual row mapping)
 - `agent_fleet/queue/fifo.py`: FIFO queue API built on the repository layer
-- `agent_fleet/prompts/policy.py`: prompt policy builder (commit/push/PR behavior in git repos)
+- `agent_fleet/prompts/policy.py`: prompt assembler that loads reviewable Markdown templates by task type
+- `agent_fleet/prompts/templates/`: task-type specific prompt templates
 - `agent_fleet/agents/codex_runner.py`: Codex adapter (`codex exec --json`) with streamed event persistence
 - `agent_fleet/orchestrator/service.py`: orchestrator worker loop with graceful stop
 - `agent_fleet/cli.py`: Click + Rich lifecycle and queue commands
@@ -35,7 +36,7 @@ Current layers:
 Queue a task:
 
 ```bash
-agent-fleet enqueue --working-dir /path/to/repo --instruction "Update failing tests and open a PR"
+agent-fleet enqueue --working-dir /path/to/repo --task-type feature_implementation --instruction "Update failing tests and open a PR"
 ```
 
 Run orchestrator in foreground:
@@ -60,7 +61,12 @@ agent-fleet events --task-id <task-id> --tail 100
 
 ## Prompt Policy Behavior
 
-When the target `working_dir` is a git repository, the generated task prompt enforces:
+Prompts are loaded from Markdown templates under `agent_fleet/prompts/templates/` and selected by `task_type`.
+
+Current task types:
+- `feature_implementation`
+
+For `feature_implementation`, when the target `working_dir` is a git repository, the assembled prompt enforces:
 
 1. commit all relevant changes
 2. push to remote when configured/possible
